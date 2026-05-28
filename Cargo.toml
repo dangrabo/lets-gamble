@@ -1,0 +1,13 @@
+[package]
+name = "lets-gamble"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.18"
+rand = "0.8"
+bevy_simple_text_input = "0.14"
+
+# Compile dependencies with optimizations even in dev for a smoother game.
+[profile.dev.package."*"]
+opt-level = 3
