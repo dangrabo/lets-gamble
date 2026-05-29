@@ -103,6 +103,9 @@ struct CoinFaceText;
 #[derive(Component)]
 struct FlipButton;
 
+#[derive(Component)]
+struct RestartButton;
+
 #[derive(Resource, Default)]
 struct ActiveFlip {
     timer: Timer,
@@ -136,6 +139,7 @@ fn main() {
                 custom_amount_system,
                 flip_button_system,
                 flip_animation_system,
+                restart_button_system,
             ),
         )
         .run();
@@ -352,6 +356,30 @@ fn setup_ui(mut commands: Commands) {
                 },
                 TextColor(Color::BLACK),
             ));
+
+            // Restart button (hidden until the player goes bankrupt)
+            root.spawn((
+                Button,
+                Node {
+                    width: Val::Px(220.0),
+                    height: Val::Px(50.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    margin: UiRect::top(Val::Px(8.0)),
+                    display: Display::None,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.70, 0.20, 0.20)),
+                RestartButton,
+            ))
+            .with_child((
+                Text::new("Restart ($10)"),
+                TextFont {
+                    font_size: 24.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
         });
 }
 
@@ -438,7 +466,7 @@ fn flip_button_system(
     mut active: ResMut<ActiveFlip>,
     bet: Res<CurrentBet>,
     bank: Res<Bank>,
-    mut status: Query<&mut Text, With<StatusText>>,
+    mut status: Query<(&mut Text, &mut TextColor), With<StatusText>>,
 ) {
     let can_flip = state.phase != Phase::Flipping
         && bet.amount > 0.0
@@ -454,8 +482,9 @@ fn flip_button_system(
             };
             active.timer = Timer::from_seconds(FLIP_DURATION, TimerMode::Once);
             state.phase = Phase::Flipping;
-            if let Ok(mut text) = status.single_mut() {
+            if let Ok((mut text, mut color)) = status.single_mut() {
                 **text = "Flipping...".to_string();
+                *color = TextColor(Color::srgb(0.9, 0.9, 0.9));
             }
         }
 
@@ -479,7 +508,7 @@ fn flip_animation_system(
     bet: Res<CurrentBet>,
     mut coin_q: Query<(&mut Node, &mut BackgroundColor), With<CoinNode>>,
     mut face_q: Query<&mut Text, With<CoinFaceText>>,
-    mut status_q: Query<&mut Text, (With<StatusText>, Without<CoinFaceText>)>,
+    mut status_q: Query<(&mut Text, &mut TextColor), (With<StatusText>, Without<CoinFaceText>)>,
 ) {
     if state.phase != Phase::Flipping {
         return;
@@ -524,13 +553,53 @@ fn flip_animation_system(
         if bank.balance < 0.0 {
             bank.balance = 0.0;
         }
-        if let Ok(mut text) = status_q.single_mut() {
-            **text = if win {
-                format!("It's {}! You WON ${:.2}!", active.result.label(), bet.amount)
+        if let Ok((mut text, mut color)) = status_q.single_mut() {
+            if bank.balance <= 0.0 {
+                **text = format!("It's {}. BANKRUPT - you're out of money!", active.result.label());
+                *color = TextColor(Color::srgb(1.0, 0.30, 0.30));
+            } else if win {
+                **text = format!("It's {}! You WON ${:.2}!", active.result.label(), bet.amount);
+                *color = TextColor(Color::srgb(0.40, 1.0, 0.50));
             } else {
-                format!("It's {}. You lost ${:.2}.", active.result.label(), bet.amount)
-            };
+                **text = format!("It's {}. You lost ${:.2}.", active.result.label(), bet.amount);
+                *color = TextColor(Color::srgb(1.0, 0.60, 0.40));
+            }
         }
         state.phase = Phase::Result;
+    }
+}
+
+fn restart_button_system(
+    mut buttons: Query<(&Interaction, &mut BackgroundColor, &mut Node), With<RestartButton>>,
+    mut bank: ResMut<Bank>,
+    mut bet: ResMut<CurrentBet>,
+    mut state: ResMut<GameState>,
+    mut face_q: Query<&mut Text, With<CoinFaceText>>,
+    mut status_q: Query<(&mut Text, &mut TextColor), (With<StatusText>, Without<CoinFaceText>)>,
+) {
+    let broke = bank.balance <= 0.0;
+
+    for (interaction, mut bg, mut node) in &mut buttons {
+        node.display = if broke { Display::Flex } else { Display::None };
+
+        if broke && *interaction == Interaction::Pressed {
+            bank.balance = STARTING_BALANCE;
+            bet.amount = 1.0;
+            bet.side = Coin::Heads;
+            state.phase = Phase::Idle;
+            if let Ok(mut text) = face_q.single_mut() {
+                **text = "?".to_string();
+            }
+            if let Ok((mut text, mut color)) = status_q.single_mut() {
+                **text = "Place your bet!".to_string();
+                *color = TextColor(Color::srgb(0.9, 0.9, 0.9));
+            }
+        }
+
+        *bg = BackgroundColor(match *interaction {
+            Interaction::Pressed => Color::srgb(0.50, 0.10, 0.10),
+            Interaction::Hovered => Color::srgb(0.85, 0.28, 0.28),
+            Interaction::None => Color::srgb(0.70, 0.20, 0.20),
+        });
     }
 }
