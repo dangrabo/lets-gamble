@@ -3,11 +3,15 @@ use bevy_simple_text_input::{
     TextInput, TextInputInactive, TextInputPlaceholder, TextInputPlugin, TextInputSettings,
     TextInputTextColor, TextInputTextFont, TextInputValue,
 };
+use rand::Rng;
 
 const STARTING_BALANCE: f64 = 10.0;
+const FLIP_DURATION: f32 = 1.3;
+const COIN_SIZE: f32 = 120.0;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum Coin {
+    #[default]
     Heads,
     Tails,
 }
@@ -17,6 +21,13 @@ impl Coin {
         match self {
             Coin::Heads => "HEADS",
             Coin::Tails => "TAILS",
+        }
+    }
+
+    fn short(self) -> &'static str {
+        match self {
+            Coin::Heads => "H",
+            Coin::Tails => "T",
         }
     }
 }
@@ -83,6 +94,21 @@ enum BetButton {
 #[derive(Component)]
 struct CustomAmountInput;
 
+#[derive(Component)]
+struct CoinNode;
+
+#[derive(Component)]
+struct CoinFaceText;
+
+#[derive(Component)]
+struct FlipButton;
+
+#[derive(Resource, Default)]
+struct ActiveFlip {
+    timer: Timer,
+    result: Coin,
+}
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -98,6 +124,7 @@ fn main() {
         .init_resource::<Bank>()
         .init_resource::<GameState>()
         .init_resource::<CurrentBet>()
+        .init_resource::<ActiveFlip>()
         .add_systems(Startup, (setup_camera, setup_ui))
         .add_systems(
             Update,
@@ -107,6 +134,8 @@ fn main() {
                 side_button_system,
                 bet_button_system,
                 custom_amount_system,
+                flip_button_system,
+                flip_animation_system,
             ),
         )
         .run();
@@ -266,6 +295,63 @@ fn setup_ui(mut commands: Commands) {
                     BackgroundColor(Color::srgb(0.10, 0.10, 0.12)),
                 ));
             });
+
+            // The coin: a fixed-size slot reserves constant layout space so the
+            // FLIP button below stays put while the inner coin squashes.
+            root.spawn(Node {
+                width: Val::Px(COIN_SIZE),
+                height: Val::Px(COIN_SIZE),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                margin: UiRect::top(Val::Px(8.0)),
+                ..default()
+            })
+            .with_children(|slot| {
+                slot.spawn((
+                    CoinNode,
+                    Node {
+                        width: Val::Px(COIN_SIZE),
+                        height: Val::Px(COIN_SIZE),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border_radius: BorderRadius::all(Val::Percent(50.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.95, 0.82, 0.25)),
+                ))
+                .with_child((
+                    Text::new("?"),
+                    TextFont {
+                        font_size: 56.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.2, 0.15, 0.0)),
+                    CoinFaceText,
+                ));
+            });
+
+            // FLIP button
+            root.spawn((
+                Button,
+                Node {
+                    width: Val::Px(200.0),
+                    height: Val::Px(56.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    margin: UiRect::top(Val::Px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.85, 0.65, 0.10)),
+                FlipButton,
+            ))
+            .with_child((
+                Text::new("FLIP!"),
+                TextFont {
+                    font_size: 28.0,
+                    ..default()
+                },
+                TextColor(Color::BLACK),
+            ));
         });
 }
 
@@ -343,5 +429,108 @@ fn custom_amount_system(
                 bet.amount = parsed.min(bank.balance);
             }
         }
+    }
+}
+
+fn flip_button_system(
+    mut buttons: Query<(&Interaction, &mut BackgroundColor), With<FlipButton>>,
+    mut state: ResMut<GameState>,
+    mut active: ResMut<ActiveFlip>,
+    bet: Res<CurrentBet>,
+    bank: Res<Bank>,
+    mut status: Query<&mut Text, With<StatusText>>,
+) {
+    let can_flip = state.phase != Phase::Flipping
+        && bet.amount > 0.0
+        && bet.amount <= bank.balance + 1e-9;
+
+    for (interaction, mut bg) in &mut buttons {
+        if can_flip && *interaction == Interaction::Pressed {
+            let mut rng = rand::thread_rng();
+            active.result = if rng.gen_bool(0.5) {
+                Coin::Heads
+            } else {
+                Coin::Tails
+            };
+            active.timer = Timer::from_seconds(FLIP_DURATION, TimerMode::Once);
+            state.phase = Phase::Flipping;
+            if let Ok(mut text) = status.single_mut() {
+                **text = "Flipping...".to_string();
+            }
+        }
+
+        *bg = BackgroundColor(if !can_flip {
+            Color::srgb(0.35, 0.35, 0.35)
+        } else {
+            match *interaction {
+                Interaction::Pressed => Color::srgb(0.70, 0.50, 0.05),
+                Interaction::Hovered => Color::srgb(0.95, 0.75, 0.20),
+                Interaction::None => Color::srgb(0.85, 0.65, 0.10),
+            }
+        });
+    }
+}
+
+fn flip_animation_system(
+    time: Res<Time>,
+    mut state: ResMut<GameState>,
+    mut active: ResMut<ActiveFlip>,
+    mut bank: ResMut<Bank>,
+    bet: Res<CurrentBet>,
+    mut coin_q: Query<(&mut Node, &mut BackgroundColor), With<CoinNode>>,
+    mut face_q: Query<&mut Text, With<CoinFaceText>>,
+    mut status_q: Query<&mut Text, (With<StatusText>, Without<CoinFaceText>)>,
+) {
+    if state.phase != Phase::Flipping {
+        return;
+    }
+
+    active.timer.tick(time.delta());
+    let elapsed = active.timer.elapsed_secs();
+    let finished = active.timer.is_finished();
+
+    let shown = if finished {
+        active.result
+    } else if (elapsed * 12.0) as i32 % 2 == 0 {
+        Coin::Heads
+    } else {
+        Coin::Tails
+    };
+
+    if let Ok(mut text) = face_q.single_mut() {
+        **text = shown.short().to_string();
+    }
+
+    if let Ok((mut node, mut bg)) = coin_q.single_mut() {
+        let squash = if finished {
+            1.0
+        } else {
+            (elapsed * 18.0).cos().abs() * 0.85 + 0.15
+        };
+        node.height = Val::Px(COIN_SIZE * squash);
+        *bg = BackgroundColor(match shown {
+            Coin::Heads => Color::srgb(0.95, 0.82, 0.25),
+            Coin::Tails => Color::srgb(0.80, 0.80, 0.85),
+        });
+    }
+
+    if finished {
+        let win = active.result == bet.side;
+        if win {
+            bank.balance += bet.amount;
+        } else {
+            bank.balance -= bet.amount;
+        }
+        if bank.balance < 0.0 {
+            bank.balance = 0.0;
+        }
+        if let Ok(mut text) = status_q.single_mut() {
+            **text = if win {
+                format!("It's {}! You WON ${:.2}!", active.result.label(), bet.amount)
+            } else {
+                format!("It's {}. You lost ${:.2}.", active.result.label(), bet.amount)
+            };
+        }
+        state.phase = Phase::Result;
     }
 }
