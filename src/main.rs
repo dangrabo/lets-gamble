@@ -1,4 +1,8 @@
 use bevy::prelude::*;
+use bevy_simple_text_input::{
+    TextInput, TextInputInactive, TextInputPlaceholder, TextInputPlugin, TextInputSettings,
+    TextInputTextColor, TextInputTextFont, TextInputValue,
+};
 
 const STARTING_BALANCE: f64 = 10.0;
 
@@ -76,6 +80,9 @@ enum BetButton {
     AllIn,
 }
 
+#[derive(Component)]
+struct CustomAmountInput;
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -86,6 +93,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(TextInputPlugin)
         .insert_resource(ClearColor(Color::srgb(0.05, 0.18, 0.10)))
         .init_resource::<Bank>()
         .init_resource::<GameState>()
@@ -98,6 +106,7 @@ fn main() {
                 update_bet_text,
                 side_button_system,
                 bet_button_system,
+                custom_amount_system,
             ),
         )
         .run();
@@ -210,6 +219,53 @@ fn setup_ui(mut commands: Commands) {
                     .with_child(button_text(label));
                 }
             });
+
+            // Custom amount input row
+            root.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn((
+                    Text::new("Custom $:"),
+                    TextFont {
+                        font_size: 20.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                ));
+                row.spawn((
+                    TextInput,
+                    TextInputValue(String::new()),
+                    TextInputTextFont(TextFont {
+                        font_size: 20.0,
+                        ..default()
+                    }),
+                    TextInputTextColor(TextColor(Color::WHITE)),
+                    TextInputInactive(false),
+                    TextInputSettings {
+                        max_length: Some(9),
+                        ..default()
+                    },
+                    TextInputPlaceholder {
+                        value: "type amount".to_string(),
+                        ..default()
+                    },
+                    CustomAmountInput,
+                    Node {
+                        width: Val::Px(170.0),
+                        height: Val::Px(38.0),
+                        padding: UiRect::all(Val::Px(6.0)),
+                        border: UiRect::all(Val::Px(2.0)),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgb(0.6, 0.6, 0.6)),
+                    BackgroundColor(Color::srgb(0.10, 0.10, 0.12)),
+                ));
+            });
         });
 }
 
@@ -269,5 +325,23 @@ fn bet_button_system(
             Interaction::Hovered => Color::srgb(0.25, 0.25, 0.30),
             Interaction::None => Color::srgb(0.15, 0.15, 0.18),
         });
+    }
+}
+
+fn custom_amount_system(
+    query: Query<&TextInputValue, (Changed<TextInputValue>, With<CustomAmountInput>)>,
+    mut bet: ResMut<CurrentBet>,
+    bank: Res<Bank>,
+) {
+    for value in &query {
+        let trimmed = value.0.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(parsed) = trimmed.parse::<f64>() {
+            if parsed.is_finite() && parsed >= 0.0 {
+                bet.amount = parsed.min(bank.balance);
+            }
+        }
     }
 }
