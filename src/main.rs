@@ -7,7 +7,11 @@ use rand::Rng;
 
 const STARTING_BALANCE: f64 = 10.0;
 const FLIP_DURATION: f32 = 1.3;
-const COIN_SIZE: f32 = 120.0;
+// Coin images are 3:2 (1536x1024) with the round coin centered, so the node
+// must keep that aspect or the circle gets stretched into an oval. The visible
+// coin diameter equals the node height.
+const COIN_W: f32 = 225.0;
+const COIN_H: f32 = 150.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum Coin {
@@ -21,13 +25,6 @@ impl Coin {
         match self {
             Coin::Heads => "HEADS",
             Coin::Tails => "TAILS",
-        }
-    }
-
-    fn short(self) -> &'static str {
-        match self {
-            Coin::Heads => "H",
-            Coin::Tails => "T",
         }
     }
 }
@@ -98,9 +95,6 @@ struct CustomAmountInput;
 struct CoinNode;
 
 #[derive(Component)]
-struct CoinFaceText;
-
-#[derive(Component)]
 struct FlipButton;
 
 #[derive(Component)]
@@ -112,12 +106,27 @@ struct ActiveFlip {
     result: Coin,
 }
 
+#[derive(Resource)]
+struct CoinAssets {
+    heads: Handle<Image>,
+    tails: Handle<Image>,
+}
+
+impl CoinAssets {
+    fn face(&self, coin: Coin) -> Handle<Image> {
+        match coin {
+            Coin::Heads => self.heads.clone(),
+            Coin::Tails => self.tails.clone(),
+        }
+    }
+}
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Lucky Flip - Coin Toss Gambler".into(),
-                resolution: (800u32, 600u32).into(),
+                resolution: (1280u32, 720u32).into(),
                 ..default()
             }),
             ..default()
@@ -171,216 +180,254 @@ fn button_text(label: &str) -> (Text, TextFont, TextColor) {
     )
 }
 
-fn setup_ui(mut commands: Commands) {
+fn setup_ui(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let coin_assets = CoinAssets {
+        heads: asset_server.load("coin_heads.png"),
+        tails: asset_server.load("coin_tails.png"),
+    };
+    let initial_coin = coin_assets.heads.clone();
+
     commands
         .spawn(Node {
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
             flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::SpaceBetween,
             align_items: AlignItems::Center,
-            padding: UiRect::all(Val::Px(20.0)),
-            row_gap: Val::Px(14.0),
             ..default()
         })
         .with_children(|root| {
+            // Full-window casino scene behind everything.
             root.spawn((
-                Text::new("Balance: $0.00"),
-                TextFont {
-                    font_size: 40.0,
+                ImageNode::new(asset_server.load("casino_scene.png")),
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    top: Val::Px(0.0),
+                    left: Val::Px(0.0),
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.92, 0.45)),
-                BalanceText,
+                GlobalZIndex(-1),
             ));
 
+            // Top bar: balance (left) and status message (right).
             root.spawn((
-                Text::new("Place your bet!"),
-                TextFont {
-                    font_size: 24.0,
+                Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::axes(Val::Px(28.0), Val::Px(14.0)),
                     ..default()
                 },
-                TextColor(Color::srgb(0.9, 0.9, 0.9)),
-                StatusText,
-            ));
-
-            root.spawn((
-                Text::new("Bet: $1.00 on HEADS"),
-                TextFont {
-                    font_size: 22.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.8, 0.95, 0.85)),
-                BetText,
-            ));
-
-            // Side selection row (Heads / Tails)
-            root.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                ..default()
-            })
-            .with_children(|row| {
-                for side in [Coin::Heads, Coin::Tails] {
-                    row.spawn((
-                        Button,
-                        button_node(),
-                        BackgroundColor(Color::srgb(0.15, 0.15, 0.18)),
-                        SideButton(side),
-                    ))
-                    .with_child(button_text(side.label()));
-                }
-            });
-
-            // Bet amount row ($1 / $5 / $10 / All-in)
-            root.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                ..default()
-            })
-            .with_children(|row| {
-                let presets: [(&str, BetButton); 4] = [
-                    ("$1", BetButton::Set(1.0)),
-                    ("$5", BetButton::Set(5.0)),
-                    ("$10", BetButton::Set(10.0)),
-                    ("All-in", BetButton::AllIn),
-                ];
-                for (label, action) in presets {
-                    row.spawn((
-                        Button,
-                        button_node(),
-                        BackgroundColor(Color::srgb(0.15, 0.15, 0.18)),
-                        action,
-                    ))
-                    .with_child(button_text(label));
-                }
-            });
-
-            // Custom amount input row
-            root.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|row| {
-                row.spawn((
-                    Text::new("Custom $:"),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+            ))
+            .with_children(|bar| {
+                bar.spawn((
+                    Text::new("Balance: $0.00"),
                     TextFont {
-                        font_size: 20.0,
+                        font_size: 38.0,
                         ..default()
                     },
-                    TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                    TextColor(Color::srgb(1.0, 0.85, 0.30)),
+                    BalanceText,
                 ));
-                row.spawn((
-                    TextInput,
-                    TextInputValue(String::new()),
-                    TextInputTextFont(TextFont {
-                        font_size: 20.0,
-                        ..default()
-                    }),
-                    TextInputTextColor(TextColor(Color::WHITE)),
-                    TextInputInactive(false),
-                    TextInputSettings {
-                        max_length: Some(9),
+                bar.spawn((
+                    Text::new("Place your bet!"),
+                    TextFont {
+                        font_size: 24.0,
                         ..default()
                     },
-                    TextInputPlaceholder {
-                        value: "type amount".to_string(),
-                        ..default()
-                    },
-                    CustomAmountInput,
-                    Node {
-                        width: Val::Px(170.0),
-                        height: Val::Px(38.0),
-                        padding: UiRect::all(Val::Px(6.0)),
-                        border: UiRect::all(Val::Px(2.0)),
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BorderColor::all(Color::srgb(0.6, 0.6, 0.6)),
-                    BackgroundColor(Color::srgb(0.10, 0.10, 0.12)),
+                    TextColor(Color::srgb(0.92, 0.92, 0.92)),
+                    StatusText,
                 ));
             });
 
-            // The coin: a fixed-size slot reserves constant layout space so the
-            // FLIP button below stays put while the inner coin squashes.
+            // Middle: the coin sits low on the felt (FlexEnd) so it doesn't
+            // cover the dealer's face higher up in the scene.
             root.spawn(Node {
-                width: Val::Px(COIN_SIZE),
-                height: Val::Px(COIN_SIZE),
-                justify_content: JustifyContent::Center,
+                width: Val::Percent(100.0),
+                flex_grow: 1.0,
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::FlexEnd,
                 align_items: AlignItems::Center,
-                margin: UiRect::top(Val::Px(8.0)),
+                padding: UiRect::bottom(Val::Px(36.0)),
                 ..default()
             })
-            .with_children(|slot| {
-                slot.spawn((
-                    CoinNode,
+            .with_children(|mid| {
+                // Fixed-size slot keeps layout stable while the coin squashes.
+                mid.spawn(Node {
+                    width: Val::Px(COIN_W),
+                    height: Val::Px(COIN_H),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|slot| {
+                    slot.spawn((
+                        CoinNode,
+                        ImageNode::new(initial_coin),
+                        Node {
+                            width: Val::Px(COIN_W),
+                            height: Val::Px(COIN_H),
+                            ..default()
+                        },
+                    ));
+                });
+            });
+
+            // Bottom HUD: all the betting controls on a dark panel.
+            root.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::all(Val::Px(14.0)),
+                    row_gap: Val::Px(8.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.60)),
+            ))
+            .with_children(|hud| {
+                hud.spawn((
+                    Text::new("Bet: $1.00 on HEADS"),
+                    TextFont {
+                        font_size: 22.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.85, 0.95, 0.88)),
+                    BetText,
+                ));
+
+                // Side selection + custom amount row
+                hud.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(10.0),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for side in [Coin::Heads, Coin::Tails] {
+                        row.spawn((
+                            Button,
+                            button_node(),
+                            BackgroundColor(Color::srgb(0.15, 0.15, 0.18)),
+                            SideButton(side),
+                        ))
+                        .with_child(button_text(side.label()));
+                    }
+
+                    row.spawn((
+                        Text::new("Custom $:"),
+                        TextFont {
+                            font_size: 20.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                    ));
+                    row.spawn((
+                        TextInput,
+                        TextInputValue(String::new()),
+                        TextInputTextFont(TextFont {
+                            font_size: 20.0,
+                            ..default()
+                        }),
+                        TextInputTextColor(TextColor(Color::WHITE)),
+                        TextInputInactive(false),
+                        TextInputSettings {
+                            max_length: Some(9),
+                            ..default()
+                        },
+                        TextInputPlaceholder {
+                            value: "type amount".to_string(),
+                            ..default()
+                        },
+                        CustomAmountInput,
+                        Node {
+                            width: Val::Px(160.0),
+                            height: Val::Px(38.0),
+                            padding: UiRect::all(Val::Px(6.0)),
+                            border: UiRect::all(Val::Px(2.0)),
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BorderColor::all(Color::srgb(0.6, 0.6, 0.6)),
+                        BackgroundColor(Color::srgb(0.10, 0.10, 0.12)),
+                    ));
+                });
+
+                // Bet amount row ($1 / $5 / $10 / All-in)
+                hud.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    ..default()
+                })
+                .with_children(|row| {
+                    let presets: [(&str, BetButton); 4] = [
+                        ("$1", BetButton::Set(1.0)),
+                        ("$5", BetButton::Set(5.0)),
+                        ("$10", BetButton::Set(10.0)),
+                        ("All-in", BetButton::AllIn),
+                    ];
+                    for (label, action) in presets {
+                        row.spawn((
+                            Button,
+                            button_node(),
+                            BackgroundColor(Color::srgb(0.15, 0.15, 0.18)),
+                            action,
+                        ))
+                        .with_child(button_text(label));
+                    }
+                });
+
+                // FLIP button
+                hud.spawn((
+                    Button,
                     Node {
-                        width: Val::Px(COIN_SIZE),
-                        height: Val::Px(COIN_SIZE),
+                        width: Val::Px(220.0),
+                        height: Val::Px(54.0),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
-                        border_radius: BorderRadius::all(Val::Percent(50.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.95, 0.82, 0.25)),
+                    BackgroundColor(Color::srgb(0.85, 0.65, 0.10)),
+                    FlipButton,
                 ))
                 .with_child((
-                    Text::new("?"),
+                    Text::new("FLIP!"),
                     TextFont {
-                        font_size: 56.0,
+                        font_size: 28.0,
                         ..default()
                     },
-                    TextColor(Color::srgb(0.2, 0.15, 0.0)),
-                    CoinFaceText,
+                    TextColor(Color::BLACK),
+                ));
+
+                // Restart button (hidden until the player goes bankrupt)
+                hud.spawn((
+                    Button,
+                    Node {
+                        width: Val::Px(220.0),
+                        height: Val::Px(50.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        display: Display::None,
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.70, 0.20, 0.20)),
+                    RestartButton,
+                ))
+                .with_child((
+                    Text::new("Restart ($10)"),
+                    TextFont {
+                        font_size: 24.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
                 ));
             });
-
-            // FLIP button
-            root.spawn((
-                Button,
-                Node {
-                    width: Val::Px(200.0),
-                    height: Val::Px(56.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    margin: UiRect::top(Val::Px(8.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgb(0.85, 0.65, 0.10)),
-                FlipButton,
-            ))
-            .with_child((
-                Text::new("FLIP!"),
-                TextFont {
-                    font_size: 28.0,
-                    ..default()
-                },
-                TextColor(Color::BLACK),
-            ));
-
-            // Restart button (hidden until the player goes bankrupt)
-            root.spawn((
-                Button,
-                Node {
-                    width: Val::Px(220.0),
-                    height: Val::Px(50.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    margin: UiRect::top(Val::Px(8.0)),
-                    display: Display::None,
-                    ..default()
-                },
-                BackgroundColor(Color::srgb(0.70, 0.20, 0.20)),
-                RestartButton,
-            ))
-            .with_child((
-                Text::new("Restart ($10)"),
-                TextFont {
-                    font_size: 24.0,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-            ));
         });
+
+    commands.insert_resource(coin_assets);
 }
 
 fn update_balance_text(bank: Res<Bank>, mut query: Query<&mut Text, With<BalanceText>>) {
@@ -506,9 +553,9 @@ fn flip_animation_system(
     mut active: ResMut<ActiveFlip>,
     mut bank: ResMut<Bank>,
     bet: Res<CurrentBet>,
-    mut coin_q: Query<(&mut Node, &mut BackgroundColor), With<CoinNode>>,
-    mut face_q: Query<&mut Text, With<CoinFaceText>>,
-    mut status_q: Query<(&mut Text, &mut TextColor), (With<StatusText>, Without<CoinFaceText>)>,
+    coin_assets: Res<CoinAssets>,
+    mut coin_q: Query<(&mut Node, &mut ImageNode), With<CoinNode>>,
+    mut status_q: Query<(&mut Text, &mut TextColor), With<StatusText>>,
 ) {
     if state.phase != Phase::Flipping {
         return;
@@ -526,21 +573,15 @@ fn flip_animation_system(
         Coin::Tails
     };
 
-    if let Ok(mut text) = face_q.single_mut() {
-        **text = shown.short().to_string();
-    }
-
-    if let Ok((mut node, mut bg)) = coin_q.single_mut() {
+    if let Ok((mut node, mut image)) = coin_q.single_mut() {
+        // Squash the coin's height to fake a vertical spin.
         let squash = if finished {
             1.0
         } else {
             (elapsed * 18.0).cos().abs() * 0.85 + 0.15
         };
-        node.height = Val::Px(COIN_SIZE * squash);
-        *bg = BackgroundColor(match shown {
-            Coin::Heads => Color::srgb(0.95, 0.82, 0.25),
-            Coin::Tails => Color::srgb(0.80, 0.80, 0.85),
-        });
+        node.height = Val::Px(COIN_H * squash);
+        image.image = coin_assets.face(shown);
     }
 
     if finished {
@@ -574,8 +615,9 @@ fn restart_button_system(
     mut bank: ResMut<Bank>,
     mut bet: ResMut<CurrentBet>,
     mut state: ResMut<GameState>,
-    mut face_q: Query<&mut Text, With<CoinFaceText>>,
-    mut status_q: Query<(&mut Text, &mut TextColor), (With<StatusText>, Without<CoinFaceText>)>,
+    coin_assets: Res<CoinAssets>,
+    mut coin_q: Query<&mut ImageNode, With<CoinNode>>,
+    mut status_q: Query<(&mut Text, &mut TextColor), With<StatusText>>,
 ) {
     let broke = bank.balance <= 0.0;
 
@@ -587,8 +629,8 @@ fn restart_button_system(
             bet.amount = 1.0;
             bet.side = Coin::Heads;
             state.phase = Phase::Idle;
-            if let Ok(mut text) = face_q.single_mut() {
-                **text = "?".to_string();
+            if let Ok(mut image) = coin_q.single_mut() {
+                image.image = coin_assets.heads.clone();
             }
             if let Ok((mut text, mut color)) = status_q.single_mut() {
                 **text = "Place your bet!".to_string();
